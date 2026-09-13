@@ -204,17 +204,50 @@ async function refreshAll() {
   await Promise.all([loadEvents(), loadReceipts()]);
 }
 
+// In-browser Gemini Nano (Chrome's built-in Prompt API, Chrome 138+) --
+// runs on-device, no server call, no API key. Used only to sync the Trip
+// ideas box to whatever destination is typed; the flight recommendation
+// itself still goes through Nebius separately below. Falls back to doing
+// nothing (not a regex guess) if the browser doesn't support it.
+let _nanoSessionPromise = null;
+async function extractDestinationOnDevice(text) {
+  if (typeof LanguageModel === 'undefined') return null;
+  try {
+    const availability = await LanguageModel.availability();
+    if (availability === 'unavailable') return null;
+    if (!_nanoSessionPromise) _nanoSessionPromise = LanguageModel.create();
+    const session = await _nanoSessionPromise;
+    const result = await session.prompt(
+      `Extract only the destination city from this travel request. ` +
+      `Reply with just the city name and nothing else. Request: "${text}"`
+    );
+    return result.trim().replace(/[."]/g, '') || null;
+  } catch (err) {
+    console.warn('On-device Gemini Nano unavailable:', err);
+    return null;
+  }
+}
+
 document.getElementById('searchBtn').addEventListener('click', async () => {
   const btn = document.getElementById('searchBtn');
   const rationaleEl = document.getElementById('rationale');
   btn.disabled = true;
   rationaleEl.textContent = 'Agent thinking…';
 
+  const requestText = document.getElementById('requestText').value;
+
+  extractDestinationOnDevice(requestText).then(dest => {
+    if (dest) {
+      document.getElementById('itineraryDestination').value = dest;
+      document.getElementById('itineraryBtn').click();
+    }
+  });
+
   let data;
   try {
     data = await fetch('/api/agent', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: document.getElementById('requestText').value}),
+      body: JSON.stringify({text: requestText}),
     }).then(r => r.json());
   } finally {
     btn.disabled = false;
