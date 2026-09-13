@@ -162,6 +162,10 @@ async function loadPolicy() {
     <div class="policy-row"><span class="label">Approved category</span><span>${p.approved_categories.join(', ')}</span></div>
     <div class="policy-row"><span class="label">Vendor allowlist</span><span>${p.vendor_allowlist.join(', ')}</span></div>
     <div class="policy-row"><span class="label">Human confirmation</span><span>&ge; $${p.human_confirmation_threshold.toFixed(2)}</span></div>
+    <div class="policy-row" style="border-top:1px dashed var(--border);margin-top:4px;padding-top:10px;">
+      <span class="label">PayPal sandbox ceiling <span title="A second, independent limit inside the payment tool itself -- even if the policy engine above had a bug, this still refuses anything over the cap." style="cursor:help;">ⓘ</span></span>
+      <span>&le; $${p.paypal_ceiling.toFixed(2)}</span>
+    </div>
   `;
 }
 

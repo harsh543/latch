@@ -106,6 +106,10 @@ def get_policy():
         "vendor_allowlist": sorted(p.vendor_allowlist),
         "human_confirmation_threshold": p.human_confirmation_threshold,
         "max_stops": p.max_stops,
+        # A second, independent ceiling inside paypal_client.py itself --
+        # defense-in-depth. Even if policy_engine.py had a bug and approved
+        # something over budget, the payment tool would still refuse it.
+        "paypal_ceiling": float(os.environ.get("MAX_PAYMENT_AMOUNT", "100.00")),
     }
 
 
