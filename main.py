@@ -205,6 +205,33 @@ def book(req: BookRequest):
     return {"decision": "approved", "receipt": receipt}
 
 
+class ItineraryRequest(BaseModel):
+    destination: str
+
+
+@app.post("/api/itinerary")
+def get_itinerary(req: ItineraryRequest):
+    """Deep Research / Linkup track: real-time web search for free/low-cost
+    things to do at the destination. Informational only -- never touches
+    the policy or payment decision."""
+    log_event("itinerary_search", f"Researching things to do in {req.destination}", {})
+    try:
+        from itinerary import build_itinerary
+
+        result = build_itinerary(req.destination)
+    except Exception as exc:
+        log_event("itinerary_failed", f"Itinerary search failed: {exc}", {})
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    log_event(
+        "itinerary_result",
+        f"Found {len(result['activities'])} activities for {req.destination}"
+        + (f" ({len(result['unconfirmed'])} unconfirmed)" if result["unconfirmed"] else ""),
+        result,
+    )
+    return result
+
+
 def _make_receipt(decision, flight: dict, payment: Optional[dict], payment_error: Optional[str] = None) -> dict:
     body = {
         "id": decision.id,

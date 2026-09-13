@@ -120,6 +120,15 @@
       </div>
 
       <div class="panel">
+        <h2>Trip ideas <span style="font-weight:normal;color:var(--dim);font-size:11px;">(live web search via Linkup)</span></h2>
+        <div style="display:flex;gap:8px;">
+          <input id="itineraryDestination" value="San Francisco" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;" />
+          <button id="itineraryBtn">Find free things to do</button>
+        </div>
+        <div id="itineraryResults" style="margin-top:12px;font-size:13px;"></div>
+      </div>
+
+      <div class="panel">
         <h2>Receipts &amp; audit trail</h2>
         <div id="receipts" class="scroll">
           <div style="color:var(--dim);font-size:13px;">No purchases attempted yet.</div>
@@ -264,6 +273,39 @@ async function submitBooking(humanConfirmed) {
 
   refreshAll();
 }
+
+document.getElementById('itineraryBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('itineraryBtn');
+  const el = document.getElementById('itineraryResults');
+  const destination = document.getElementById('itineraryDestination').value;
+  btn.disabled = true;
+  el.innerHTML = '<div style="color:var(--dim);">Searching the web…</div>';
+
+  try {
+    const data = await fetch('/api/itinerary', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({destination}),
+    }).then(r => {
+      if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'search failed'); });
+      return r.json();
+    });
+
+    el.innerHTML = (data.activities || []).map(a => `
+      <div style="border-left:3px solid var(--border);padding:6px 10px;margin-bottom:8px;">
+        <b>${a.name}</b>
+        ${a.is_free === true ? '<span class="badge approved">FREE</span>' : a.is_free === false ? '<span class="badge blocked">PAID</span>' : '<span style="color:var(--warn);font-size:11px;">unconfirmed</span>'}
+        <div style="color:var(--dim);">${a.description || ''}</div>
+        ${a.source_url ? `<div class="hash"><a href="${a.source_url}" target="_blank" style="color:var(--accent);">${a.source_url}</a></div>` : ''}
+      </div>
+    `).join('') + (data.unconfirmed && data.unconfirmed.length
+      ? `<div style="color:var(--warn);font-size:12px;">Could not confirm: ${data.unconfirmed.join(', ')}</div>`
+      : '');
+  } catch (err) {
+    el.innerHTML = `<div style="color:var(--bad);">${err.message}</div>`;
+  }
+  btn.disabled = false;
+  refreshAll();
+});
 
 loadPolicy();
 refreshAll();
