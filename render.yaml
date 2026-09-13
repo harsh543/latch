@@ -16,3 +16,5 @@ services:
         sync: false
       - key: NEBIUS_MODEL
         value: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B
+      - key: LINKUP_API_KEY
+        sync: false
