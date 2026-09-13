@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Latch — payment firewall for AI agents</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0b0d12;
+    --panel: #12151c;
+    --border: #232838;
+    --text: #e6e9f0;
+    --dim: #8b93a7;
+    --accent: #5b8cff;
+    --ok: #35c46a;
+    --bad: #ff5d5d;
+    --warn: #f2b84b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 20px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--dim);
+    margin: 0 0 12px;
+  }
+  .flight-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .flight-card .meta { font-size: 13px; color: var(--dim); }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .policy-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .policy-row:last-child { border-bottom: none; }
+  .policy-row .label { color: var(--dim); }
+  .event, .receipt {
+    border-left: 3px solid var(--border);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    border-radius: 0 6px 6px 0;
+    background: rgba(255,255,255,0.02);
+  }
+  .event.approved, .receipt.approved { border-left-color: var(--ok); }
+  .event.blocked, .receipt.blocked { border-left-color: var(--bad); }
+  .event.captured { border-left-color: var(--ok); }
+  .event .ts, .receipt .ts { color: var(--dim); font-size: 11px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge.approved { background: rgba(53,196,106,0.15); color: var(--ok); }
+  .badge.blocked { background: rgba(255,93,93,0.15); color: var(--bad); }
+  .reasons { color: var(--bad); font-size: 12px; margin-top: 4px; }
+  .hash { font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim); word-break: break-all; }
+  #confirmBar {
+    display: none;
+    background: rgba(242,184,75,0.12);
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .scroll { max-height: 340px; overflow-y: auto; }
+</style>
+</head>
+<body>
+  <h1>Latch</h1>
+  <div class="sub">An agent can research and prepare a purchase — it cannot spend outside your policy.</div>
+
+  <div class="grid">
+    <div class="stack">
+      <div class="panel">
+        <h2>Agent request</h2>
+        <textarea id="requestText" rows="2" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;">Find a flight to San Francisco next week under $450. Book it only if it has one stop or fewer.</textarea>
+        <div style="margin-top:8px;">
+          <button id="searchBtn">Ask agent</button>
+        </div>
+        <div id="rationale" style="margin-top:10px;font-size:13px;color:var(--dim);"></div>
+        <div id="results" style="margin-top:14px;"></div>
+        <div id="confirmBar"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Receipts &amp; audit trail</h2>
+        <div id="receipts" class="scroll">
+          <div style="color:var(--dim);font-size:13px;">No purchases attempted yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <h2>Policy</h2>
+        <div id="policy"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Agent activity</h2>
+        <div id="events" class="scroll">
+          <div style="color:var(--dim);font-size:13px;">Nothing yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+let pendingFlightId = null;
+
+async function loadPolicy() {
+  const p = await fetch('/api/policy').then(r => r.json());
+  document.getElementById('policy').innerHTML = `
+    <div class="policy-row"><span class="label">Budget</span><span>&le; $${p.budget_max.toFixed(2)}</span></div>
+    <div class="policy-row"><span class="label">Stops</span><span>&le; ${p.max_stops}</span></div>
+    <div class="policy-row"><span class="label">Approved category</span><span>${p.approved_categories.join(', ')}</span></div>
+    <div class="policy-row"><span class="label">Vendor allowlist</span><span>${p.vendor_allowlist.join(', ')}</span></div>
+    <div class="policy-row"><span class="label">Human confirmation</span><span>&ge; $${p.human_confirmation_threshold.toFixed(2)}</span></div>
+  `;
+}
+
+function fmtTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
+async function loadEvents() {
+  const events = await fetch('/api/events').then(r => r.json());
+  const el = document.getElementById('events');
+  if (!events.length) { el.innerHTML = '<div style="color:var(--dim);font-size:13px;">Nothing yet.</div>'; return; }
+  el.innerHTML = events.map(e => `
+    <div class="event ${e.kind}">
+      <div class="ts">${fmtTime(e.ts)} — ${e.kind}</div>
+      <div>${e.message}</div>
+    </div>
+  `).join('');
+}
+
+async function loadReceipts() {
+  const receipts = await fetch('/api/receipts').then(r => r.json());
+  const el = document.getElementById('receipts');
+  if (!receipts.length) { el.innerHTML = '<div style="color:var(--dim);font-size:13px;">No purchases attempted yet.</div>'; return; }
+  el.innerHTML = receipts.map(r => `
+    <div class="receipt ${r.approved ? 'approved' : 'blocked'}">
+      <div class="ts">${fmtTime(r.ts)}</div>
+      <div>
+        <span class="badge ${r.approved ? 'approved' : 'blocked'}">${r.approved ? 'APPROVED' : 'BLOCKED'}</span>
+        &nbsp;${r.flight.airline} — $${r.flight.amount.toFixed(2)} (${r.flight.stops} stop${r.flight.stops === 1 ? '' : 's'})
+      </div>
+      ${r.reasons.length ? `<div class="reasons">${r.reasons.join('<br/>')}</div>` : ''}
+      ${r.payment ? `<div style="margin-top:4px;font-size:12px;">PayPal order <b>${r.payment.orderId}</b>, capture <b>${r.payment.captureId}</b> — ${r.payment.status}</div>` : ''}
+      ${r.payment_error ? `<div class="reasons">Payment tool error: ${r.payment_error}</div>` : ''}
+      <div class="hash">hash: ${r.content_hash}</div>
+    </div>
+  `).join('');
+}
+
+async function refreshAll() {
+  await Promise.all([loadEvents(), loadReceipts()]);
+}
+
+document.getElementById('searchBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('searchBtn');
+  const rationaleEl = document.getElementById('rationale');
+  btn.disabled = true;
+  rationaleEl.textContent = 'Agent thinking…';
+
+  let data;
+  try {
+    data = await fetch('/api/agent', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: document.getElementById('requestText').value}),
+    }).then(r => r.json());
+  } finally {
+    btn.disabled = false;
+  }
+
+  const recommendedId = data.recommendation ? data.recommendation.flight_id : null;
+  rationaleEl.innerHTML = data.recommendation
+    ? `<b>Agent recommends ${recommendedId}:</b> ${data.recommendation.rationale}`
+    : '';
+
+  document.getElementById('results').innerHTML = data.results.map(f => `
+    <div class="flight-card" style="${f.id === recommendedId ? 'border-color:var(--accent);' : ''}">
+      <div>
+        <div><b>${f.airline}</b> — $${f.amount.toFixed(2)} ${f.id === recommendedId ? '<span class="badge approved">RECOMMENDED</span>' : ''}</div>
+        <div class="meta">${f.stops} stop${f.stops === 1 ? '' : 's'} · vendor: ${f.vendor}</div>
+      </div>
+      <button data-flight="${f.id}" class="bookBtn">Book this flight</button>
+    </div>
+  `).join('');
+
+  document.querySelectorAll('.bookBtn').forEach(b => {
+    b.addEventListener('click', () => requestBooking(b.dataset.flight));
+  });
+
+  refreshAll();
+});
+
+function requestBooking(flightId) {
+  pendingFlightId = flightId;
+  const bar = document.getElementById('confirmBar');
+  bar.style.display = 'block';
+  bar.innerHTML = `
+    This purchase requires human confirmation before Latch will attempt payment.
+    <div style="margin-top:8px;">
+      <button id="confirmYes">Confirm &amp; attempt purchase</button>
+      <button id="confirmNo" class="secondary">Cancel</button>
+    </div>
+  `;
+  document.getElementById('confirmYes').addEventListener('click', () => submitBooking(true));
+  document.getElementById('confirmNo').addEventListener('click', () => {
+    bar.style.display = 'none';
+    pendingFlightId = null;
+  });
+}
+
+async function submitBooking(humanConfirmed) {
+  const bar = document.getElementById('confirmBar');
+  bar.style.display = 'none';
+  const flightId = pendingFlightId;
+  pendingFlightId = null;
+
+  await fetch('/api/book', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({flight_id: flightId, human_confirmed: humanConfirmed}),
+  }).then(r => r.json());
+
+  refreshAll();
+}
+
+loadPolicy();
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>
