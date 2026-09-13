@@ -194,7 +194,7 @@ async function loadReceipts() {
       <div class="ts">${fmtTime(r.ts)}</div>
       <div>
         <span class="badge ${r.approved ? 'approved' : 'blocked'}">${r.approved ? 'APPROVED' : 'BLOCKED'}</span>
-        &nbsp;${r.flight.airline} — $${r.flight.amount.toFixed(2)} (${r.flight.stops} stop${r.flight.stops === 1 ? '' : 's'})
+        &nbsp;${r.flight.airline} — $${r.flight.amount.toFixed(2)} (${r.flight.stops == null ? 'stops unknown' : r.flight.stops + ' stop' + (r.flight.stops === 1 ? '' : 's')})
       </div>
       ${r.reasons.length ? `<div class="reasons">${r.reasons.join('<br/>')}</div>` : ''}
       ${r.payment ? `<div style="margin-top:4px;font-size:12px;">PayPal order <b>${r.payment.orderId}</b>, capture <b>${r.payment.captureId}</b> — ${r.payment.status}</div>` : ''}
@@ -239,19 +239,17 @@ document.getElementById('searchBtn').addEventListener('click', async () => {
   rationaleEl.textContent = 'Agent thinking…';
 
   const requestText = document.getElementById('requestText').value;
-
-  extractDestinationOnDevice(requestText).then(dest => {
-    if (dest) {
-      document.getElementById('itineraryDestination').value = dest;
-      document.getElementById('itineraryBtn').click();
-    }
-  });
+  const dest = await extractDestinationOnDevice(requestText);
+  if (dest) {
+    document.getElementById('itineraryDestination').value = dest;
+    document.getElementById('itineraryBtn').click();
+  }
 
   let data;
   try {
     data = await fetch('/api/agent', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: requestText}),
+      body: JSON.stringify({text: requestText, destination: dest || undefined}),
     }).then(r => r.json());
   } finally {
     btn.disabled = false;
@@ -266,7 +264,7 @@ document.getElementById('searchBtn').addEventListener('click', async () => {
     <div class="flight-card" style="${f.id === recommendedId ? 'border-color:var(--accent);' : ''}">
       <div>
         <div><b>${f.airline}</b> — $${f.amount.toFixed(2)} ${f.id === recommendedId ? '<span class="badge approved">RECOMMENDED</span>' : ''}</div>
-        <div class="meta">${f.stops} stop${f.stops === 1 ? '' : 's'} · vendor: ${f.vendor}</div>
+        <div class="meta">${f.stops == null ? 'stops unknown' : f.stops + ' stop' + (f.stops === 1 ? '' : 's')} · vendor: ${f.vendor}${f.source === 'linkup' ? ' · <a href="' + f.source_url + '" target="_blank" style="color:var(--accent);">source</a>' : ''}</div>
       </div>
       <button data-flight="${f.id}" class="bookBtn">Book this flight</button>
     </div>

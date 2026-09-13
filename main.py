@@ -1,12 +1,12 @@
 """
 main.py -- Latch backend.
 
-Flow: search (mocked) -> pick a flight -> POST /api/book.
-/api/book runs policy_engine.evaluate() FIRST. Only if approved does it call
-PayPal's paypal_client.pay_with_test_card() (real sandbox order + capture,
-no browser step). A blocked request never reaches PayPal at all -- the
-policy is a firewall in front of the payment tool, not a check the agent
-could route around.
+Flow: search (live, via Linkup -- flight_search.py) -> pick a flight ->
+POST /api/book. /api/book runs policy_engine.evaluate() FIRST. Only if
+approved does it call PayPal's paypal_client.pay_with_test_card() (real
+sandbox order + capture, no browser step). A blocked request never
+reaches PayPal at all -- the policy is a firewall in front of the payment
+tool, not a check the agent could route around.
 
 Every attempt (approved or blocked) becomes a receipt, so the audit trail
 covers both outcomes, not just successful payments.
@@ -61,40 +61,22 @@ def log_event(kind: str, message: str, data: Optional[dict] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mocked flight search -- deterministic, no external vendor call.
-# Deliberately spans: one bookable-as-is option, one that trips the stops
-# rule, one that trips both budget and vendor-allowlist at once.
+# Live flight search (flight_search.py, Linkup-backed). Results vary by
+# destination and are cached here by id so /api/book can look up whatever
+# was actually shown to the user, regardless of which search produced it.
 # ---------------------------------------------------------------------------
 
-FLIGHTS = [
-    {
-        "id": "UA-422",
-        "vendor": "united",
-        "airline": "United Airlines",
-        "amount": 422.00,
-        "currency": "USD",
-        "stops": 1,
-        "description": "SFO round-trip, 1 stop (United)",
-    },
-    {
-        "id": "DL-398",
-        "vendor": "delta",
-        "airline": "Delta Air Lines",
-        "amount": 398.00,
-        "currency": "USD",
-        "stops": 2,
-        "description": "SFO round-trip, 2 stops (Delta)",
-    },
-    {
-        "id": "B6-515",
-        "vendor": "jetblue",
-        "airline": "JetBlue",
-        "amount": 515.00,
-        "currency": "USD",
-        "stops": 0,
-        "description": "SFO round-trip, nonstop (JetBlue)",
-    },
-]
+LAST_FLIGHTS: dict[str, dict] = {}
+DEFAULT_DESTINATION = "San Francisco"
+
+
+def _run_flight_search(destination: str) -> list[dict]:
+    from flight_search import search_flights
+
+    flights = search_flights(destination)
+    for f in flights:
+        LAST_FLIGHTS[f["id"]] = f
+    return flights
 
 
 @app.get("/api/policy")
@@ -115,31 +97,41 @@ def get_policy():
 
 @app.post("/api/search")
 def search_flights(request: dict):
-    destination = request.get("destination", "San Francisco")
-    log_event("search", f"Agent searched flights to {destination}", {"results": len(FLIGHTS)})
-    return {"destination": destination, "results": FLIGHTS}
+    destination = request.get("destination") or DEFAULT_DESTINATION
+    flights = _run_flight_search(destination)
+    log_event(
+        "search",
+        f"Live-searched flights to {destination}"
+        + (" (Linkup unavailable, showing fallback data)" if flights and flights[0].get("source") == "fallback" else ""),
+        {"results": len(flights)},
+    )
+    return {"destination": destination, "results": flights}
 
 
 class AgentRequest(BaseModel):
     text: str
+    destination: Optional[str] = None
 
 
 @app.post("/api/agent")
 def agent_recommend(req: AgentRequest):
-    """Nebius-backed NLU: parses the request and recommends one flight.
+    """Live flight search (Linkup) + Nebius-backed NLU to recommend one.
     Advisory only -- /api/book independently re-checks whatever gets
     booked against policy_engine.py regardless of what's recommended here."""
-    log_event("agent_request", f'Agent received: "{req.text}"', {})
+    destination = req.destination or DEFAULT_DESTINATION
+    log_event("agent_request", f'Agent received: "{req.text}" (destination: {destination})', {})
+
+    flights = _run_flight_search(destination)
 
     from agent import recommend_flight
 
-    recommendation = recommend_flight(req.text, FLIGHTS)
+    recommendation = recommend_flight(req.text, flights)
     log_event(
         "agent_recommend",
         f"Agent recommends {recommendation['flight_id']} — {recommendation['rationale']}",
         recommendation,
     )
-    return {"results": FLIGHTS, "recommendation": recommendation}
+    return {"destination": destination, "results": flights, "recommendation": recommendation}
 
 
 class BookRequest(BaseModel):
@@ -149,13 +141,14 @@ class BookRequest(BaseModel):
 
 @app.post("/api/book")
 def book(req: BookRequest):
-    flight = next((f for f in FLIGHTS if f["id"] == req.flight_id), None)
+    flight = LAST_FLIGHTS.get(req.flight_id)
     if flight is None:
-        raise HTTPException(status_code=404, detail="unknown flight_id")
+        raise HTTPException(status_code=404, detail="unknown flight_id -- search again, results aren't fixed")
 
+    stops_str = f"{flight['stops']} stop(s)" if flight.get("stops") is not None else "stops unknown"
     log_event(
         "select",
-        f"Agent selected {flight['airline']} — ${flight['amount']:.2f}, {flight['stops']} stop(s)",
+        f"Agent selected {flight['airline']} — ${flight['amount']:.2f}, {stops_str}",
         flight,
     )
 
